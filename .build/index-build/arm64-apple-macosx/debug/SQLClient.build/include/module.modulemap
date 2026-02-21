@@ -1,3 +1,0 @@
-module SQLClient {
-    header "/Users/kutty/Downloads/MyTestApp/SQLClient-Swift/.build/index-build/arm64-apple-macosx/debug/SQLClient.build/include/SQLClient-Swift.h"
-}
