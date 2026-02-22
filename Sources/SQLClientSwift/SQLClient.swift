@@ -458,12 +458,18 @@ public actor SQLClient {
 
 private func SQLClient_errorHandler(dbproc: OpaquePointer?, severity: Int32, dberr: Int32, oserr: Int32, dberrstr: UnsafeMutablePointer<CChar>?, oserrstr: UnsafeMutablePointer<CChar>?) -> Int32 {
     let msg = dberrstr.map { String(cString: $0) } ?? "Unknown FreeTDS error"
+    if ProcessInfo.processInfo.environment["SQL_CLIENT_DEBUG"] != nil {
+        print("DEBUG SQL Error: [\(dberr)] \(msg) (severity: \(severity))")
+    }
     NotificationCenter.default.post(name: .SQLClientMessage, object: nil, userInfo: [SQLClientMessageKey.code: Int(dberr), SQLClientMessageKey.message: msg, SQLClientMessageKey.severity: Int(severity)])
     return 1 // INT_CANCEL
 }
 
 private func SQLClient_messageHandler(dbproc: OpaquePointer?, msgno: DBINT, msgstate: Int32, severity: Int32, msgtext: UnsafeMutablePointer<CChar>?, srvname: UnsafeMutablePointer<CChar>?, proc: UnsafeMutablePointer<CChar>?, line: Int32) -> Int32 {
     let msg = msgtext.map { String(cString: $0) } ?? ""
+    if severity > 0 && ProcessInfo.processInfo.environment["SQL_CLIENT_DEBUG"] != nil {
+        print("DEBUG SQL Message: [\(msgno)] \(msg) (severity: \(severity))")
+    }
     NotificationCenter.default.post(name: .SQLClientMessage, object: nil, userInfo: [SQLClientMessageKey.code: Int(msgno), SQLClientMessageKey.message: msg, SQLClientMessageKey.severity: Int(severity)])
     return 0
 }
