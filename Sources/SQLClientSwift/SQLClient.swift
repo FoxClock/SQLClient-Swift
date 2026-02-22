@@ -141,6 +141,8 @@ public actor SQLClient {
     public func connect(options: SQLClientConnectionOptions) async throws {
         guard !connected else { throw SQLClientError.alreadyConnected }
         
+        try await checkReachability(server: options.server, port: options.port ?? 1433)
+        
         let result = try await runBlocking {
             return try self._connectSync(options: options)
         }
@@ -234,10 +236,6 @@ private func checkReachability(server: String, port: UInt16) async throws {
 }
 
     private nonisolated func _connectSync(options: SQLClientConnectionOptions) throws -> (login: TDSHandle, connection: TDSHandle) {
-        // Pre-flight — fail fast if the server isn't reachable at the TCP level.
-        // Default port for SQL Server is 1433.
-        try checkReachability(server: options.server, port: options.port ?? 1433)
-        
         dbinit()
         dberrhandle(SQLClient_errorHandler)
         dbmsghandle(SQLClient_messageHandler)
