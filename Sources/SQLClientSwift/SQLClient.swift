@@ -192,48 +192,46 @@ public actor SQLClient {
 
     // MARK: - Synchronous Helpers
 
-    private nonisolated func checkReachability(server: String, port: UInt16) throws {
-        let host = CFHostCreateWithName(nil, server as CFString).takeRetainedValue()
-        var error = CFStreamError()
-        CFHostStartInfoResolution(host, .addresses, &error)
-        
-        guard error.error == 0 else {
-            throw SQLClientError.connectionFailed(server: server)
-        }
+    // try await checkReachability(server: options.server, port: options.port ?? 1433)
 
-        // Attempt a TCP connection with a 5 second timeout
-        var readStream:  Unmanaged<CFReadStream>?
-        var writeStream: Unmanaged<CFWriteStream>?
-        CFStreamCreatePairWithSocketToHost(nil, server as CFString, UInt32(port), &readStream, &writeStream)
-
-        guard let read  = readStream?.takeRetainedValue(),
-            let write = writeStream?.takeRetainedValue() else {
-            throw SQLClientError.connectionFailed(server: server)
-        }
-
-        CFReadStreamOpen(read)
-        CFWriteStreamOpen(write)
-
-        let deadline = Date().addingTimeInterval(5)
-        var connected = false
-
-        while Date() < deadline {
-            let readStatus  = CFReadStreamGetStatus(read)
-            let writeStatus = CFWriteStreamGetStatus(write)
-            if readStatus == .open && writeStatus == .open {
-                connected = true
-                break
+private func checkReachability(server: String, port: UInt16) async throws {
+    try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+        Thread.detachNewThread {
+            var readStream:  Unmanaged<CFReadStream>?
+            var writeStream: Unmanaged<CFWriteStream>?
+            CFStreamCreatePairWithSocketToHost(
+                nil, server as CFString, UInt32(port),
+                &readStream, &writeStream
+            )
+            guard let read  = readStream?.takeRetainedValue(),
+                  let write = writeStream?.takeRetainedValue() else {
+                cont.resume(throwing: SQLClientError.connectionFailed(server: server))
+                return
             }
-            Thread.sleep(forTimeInterval: 0.1)
-        }
+            CFReadStreamOpen(read)
+            CFWriteStreamOpen(write)
 
-        CFReadStreamClose(read)
-        CFWriteStreamClose(write)
+            let deadline = Date().addingTimeInterval(5)
+            var connected = false
+            while Date() < deadline {
+                if CFReadStreamGetStatus(read)  == .open &&
+                   CFWriteStreamGetStatus(write) == .open {
+                    connected = true
+                    break
+                }
+                Thread.sleep(forTimeInterval: 0.1)
+            }
+            CFReadStreamClose(read)
+            CFWriteStreamClose(write)
 
-        guard connected else {
-            throw SQLClientError.connectionFailed(server: server)
+            if connected {
+                cont.resume()
+            } else {
+                cont.resume(throwing: SQLClientError.connectionFailed(server: server))
+            }
         }
     }
+}
 
     private nonisolated func _connectSync(options: SQLClientConnectionOptions) throws -> (login: TDSHandle, connection: TDSHandle) {
         // Pre-flight — fail fast if the server isn't reachable at the TCP level.
