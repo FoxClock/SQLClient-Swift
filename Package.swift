@@ -1,106 +1,45 @@
 // swift-tools-version: 5.9
-// Package.swift for vkuttyp/SQLClient-Swift
-
 import PackageDescription
 
 let package = Package(
     name: "SQLClientSwift",
-
-    // Explicit platform minimums — required for async/await and modern Swift Concurrency.
     platforms: [
         .iOS(.v16),
         .macOS(.v13),
         .tvOS(.v16),
     ],
-
     products: [
         .library(
             name: "SQLClientSwift",
             targets: ["SQLClientSwift"]
-        )
+        ),
     ],
-
     targets: [
-        // ── System library target for FreeTDS ─────────────────────────────
-        // Enables `import CFreeTDS` in Swift without a bridging header,
-        // which is required for Linux / Swift Package Manager builds.
-        // On macOS/iOS you still need to link libsybdb.a manually.
+        // systemLibrary uses pkg-config to find FreeTDS at build time.
+        // No hardcoded paths, no unsafeFlags — works as an SPM dependency.
+        //   macOS : brew install freetds && brew install pkg-config
+        //   Linux : sudo apt install freetds-dev
         .systemLibrary(
             name: "CFreeTDS",
-            pkgConfig: "freetds",  // resolved via `pkg-config freetds`
+            path: "Sources/CFreeTDS",
+            pkgConfig: "freetds",
             providers: [
-                .brew(["freetds"]),  // macOS: brew install freetds
-                .apt(["freetds-dev"]),  // Linux: apt install freetds-dev
+                .brew(["freetds"]),
+                .apt(["freetds-dev"]),
             ]
         ),
-
-        // ── Main library target ───────────────────────────────────────────
         .target(
             name: "SQLClientSwift",
             dependencies: ["CFreeTDS"],
             path: "Sources/SQLClientSwift",
-            cSettings: [
-                // Added compiler flags to direct CC to look for freetds in both
-                // MacOS intel and MacOS Arm directories.
-                .unsafeFlags([
-                    "-I/opt/homebrew/opt/freetds/include/",  // Apple Silicon
-                    "-I/usr/local/opt/freetds/include/",  // Intel
-                ])
-            ],
             swiftSettings: [
                 .enableExperimentalFeature("StrictConcurrency=complete"),
-                // Pass both Homebrew prefix locations to the C compiler so
-                // angle bracket includes in CFreeTDS.h resolve on both
-                // Intel (/usr/local) and Apple Silicon (/opt/homebrew) Macs.
-                // The compiler silently ignores paths that don't exist,
-                // so providing both is safe.
-                .unsafeFlags(
-                    [
-                        "-Xcc", "-I/opt/homebrew/opt/freetds/include/",  // Apple Silicon
-                        "-Xcc", "-I/usr/local/opt/freetds/include/",  // Intel
-                    ], .when(platforms: [.macOS])),
-            ],
-            linkerSettings: [
-                .unsafeFlags(
-                    [
-                        "-L/opt/homebrew/opt/freetds/lib",  // Apple Silicon
-                        "-L/usr/local/opt/freetds/lib",  // Intel
-                    ], .when(platforms: [.macOS])),
-                .linkedLibrary("sybdb"),
-                .linkedLibrary("iconv", .when(platforms: [.macOS])),
             ]
         ),
-
-        // ── Unit & integration test target ───────────────────────────────
-        // Integration tests require a live SQL Server; controlled via
-        // environment variables HOST, DATABASE, USERNAME, PASSWORD.
         .testTarget(
             name: "SQLClientSwiftTests",
             dependencies: ["SQLClientSwift"],
-            path: "Tests/SQLClientSwiftTests",
-            cSettings: [
-                .unsafeFlags([
-                    "-I/opt/homebrew/opt/freetds/include/",  // Apple Silicon
-                    "-I/usr/local/opt/freetds/include/",  // Intel
-                ])
-            ],
-            swiftSettings: [
-                .enableExperimentalFeature("StrictConcurrency=complete"),
-                .unsafeFlags(
-                    [
-                        "-Xcc", "-I/opt/homebrew/opt/freetds/include/",  // Apple Silicon
-                        "-Xcc", "-I/usr/local/opt/freetds/include/",  // Intel
-                    ], .when(platforms: [.macOS])),
-            ],
-            linkerSettings: [
-                .unsafeFlags(
-                    [
-                        "-L/opt/homebrew/opt/freetds/lib",  // Apple Silicon
-                        "-L/usr/local/opt/freetds/lib",  // Intel
-                    ], .when(platforms: [.macOS])),
-                .linkedLibrary("sybdb"),
-                .linkedLibrary("iconv", .when(platforms: [.macOS])),
-            ]
+            path: "Tests/SQLClientSwiftTests"
         ),
     ]
 )
