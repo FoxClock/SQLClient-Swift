@@ -39,9 +39,6 @@ let package = Package(
             name: "SQLClientSwift",
             dependencies: ["CFreeTDS"],
             path: "Sources/SQLClientSwift",
-            cSettings: [
-                .headerSearchPath("$(brew --prefix)/opt/freetds/include")
-            ],
             swiftSettings: [
                 .enableExperimentalFeature("StrictConcurrency=complete"),
             ],
