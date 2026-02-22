@@ -39,33 +39,10 @@ let package = Package(
             name: "SQLClientSwift",
             dependencies: ["CFreeTDS"],
             path: "Sources/SQLClientSwift",
-            cSettings: [
-                // Added compiler flags to direct CC to look for freetds in both
-                // MacOS intel and MacOS Arm directories.
-                .unsafeFlags([
-                    "-I/opt/homebrew/opt/freetds/include/",  // Apple Silicon
-                    "-I/usr/local/opt/freetds/include/",  // Intel
-                ])
-            ],
             swiftSettings: [
                 .enableExperimentalFeature("StrictConcurrency=complete"),
-                // Pass both Homebrew prefix locations to the C compiler so
-                // angle bracket includes in CFreeTDS.h resolve on both
-                // Intel (/usr/local) and Apple Silicon (/opt/homebrew) Macs.
-                // The compiler silently ignores paths that don't exist,
-                // so providing both is safe.
-                .unsafeFlags(
-                    [
-                        "-Xcc", "-I/opt/homebrew/opt/freetds/include/",  // Apple Silicon
-                        "-Xcc", "-I/usr/local/opt/freetds/include/",  // Intel
-                    ], .when(platforms: [.macOS])),
             ],
             linkerSettings: [
-                .unsafeFlags(
-                    [
-                        "-L/opt/homebrew/opt/freetds/lib",  // Apple Silicon
-                        "-L/usr/local/opt/freetds/lib",  // Intel
-                    ], .when(platforms: [.macOS])),
                 .linkedLibrary("sybdb"),
                 .linkedLibrary("iconv", .when(platforms: [.macOS])),
             ]
