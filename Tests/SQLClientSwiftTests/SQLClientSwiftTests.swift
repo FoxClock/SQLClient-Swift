@@ -28,14 +28,18 @@ final class SQLClientSwiftTests: XCTestCase {
     /// Centralises boilerplate setup making
     override func setUp() async throws {
         try super.setUpWithError()
-
+        guard canConnect else {
+            throw XCTSkip("Set HOST, USERNAME, PASSWORD environment variables to run tests.")
+        }
         client = try await makeClient()
+
     }
 
     /// Called after each XCTest method is run. Able to throw errors on cleanup.
     /// Ensures cleanup from each test is completed after the test is run. Before
     /// the next test is run.
     override func tearDown() async throws {
+        guard client != nil else { return } 
         try await client.disconnect()
         try await super.tearDown()
     }
