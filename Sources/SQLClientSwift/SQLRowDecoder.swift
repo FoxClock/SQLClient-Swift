@@ -10,23 +10,29 @@
 
 import Foundation
 
-/// Internal decoder that bridges a `SQLRow` into Swift's `Decodable` protocol.
-internal struct SQLRowDecoder: Decoder {
-    let row: SQLRow
-    var codingPath: [CodingKey] = []
-    var userInfo: [CodingUserInfoKey: Any] = [:]
+/// Decoder that bridges a `SQLRow` into Swift's `Decodable` protocol.
+public struct SQLRowDecoder: Decoder {
+    public let row: SQLRow
+    public var codingPath: [CodingKey]
+    public var userInfo: [CodingUserInfoKey: Any]
 
-    func container<Key: CodingKey>(keyedBy type: Key.Type) throws -> KeyedDecodingContainer<Key> {
+    public init(row: SQLRow, codingPath: [CodingKey] = [], userInfo: [CodingUserInfoKey: Any] = [:]) {
+        self.row = row
+        self.codingPath = codingPath
+        self.userInfo = userInfo
+    }
+
+    public func container<Key: CodingKey>(keyedBy type: Key.Type) throws -> KeyedDecodingContainer<Key> {
         KeyedDecodingContainer(SQLRowKeyedContainer<Key>(row: row, codingPath: codingPath))
     }
 
-    func unkeyedContainer() throws -> UnkeyedDecodingContainer {
+    public func unkeyedContainer() throws -> UnkeyedDecodingContainer {
         throw DecodingError.typeMismatch(
             [Any].self,
             .init(codingPath: codingPath, debugDescription: "SQLRow does not support unkeyed decoding."))
     }
 
-    func singleValueContainer() throws -> SingleValueDecodingContainer {
+    public func singleValueContainer() throws -> SingleValueDecodingContainer {
         throw DecodingError.typeMismatch(
             Any.self,
             .init(codingPath: codingPath, debugDescription: "SQLRow does not support single-value decoding."))

@@ -350,7 +350,16 @@ public actor SQLClient {
             guard len == 16 else { return NSNull() }
             var bytes = [UInt8](repeating: 0, count: 16)
             memcpy(&bytes, dataPtr, 16)
-            return NSUUID(uuidBytes: &bytes) as UUID
+            
+            // SQL Server UniqueIdentifier mixed-endian -> RFC 4122 Big-Endian
+            // Data1 (4 bytes), Data2 (2 bytes), Data3 (2 bytes) are little-endian in TDS
+            let swapped: [UInt8] = [
+                bytes[3], bytes[2], bytes[1], bytes[0],
+                bytes[5], bytes[4],
+                bytes[7], bytes[6],
+                bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]
+            ]
+            return NSUUID(uuidBytes: swapped) as UUID
         case 31: // SYBVOID
             return NSNull()
         default:
@@ -417,6 +426,7 @@ public actor SQLClient {
         switch value {
         case let s as String: return "'" + s.replacingOccurrences(of: "'", with: "''") + "'"
         case let n as NSNumber: return n.stringValue
+        case let u as UUID: return "'" + u.uuidString + "'"
         case let d as Date:
             let df = DateFormatter()
             df.locale = Locale(identifier: "en_US_POSIX")
