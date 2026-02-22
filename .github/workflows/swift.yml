@@ -21,23 +21,19 @@ jobs:
       - name: Install FreeTDS
         run: brew install freetds
 
-      - name: Register freetds.pc with pkg-config
-        # Homebrew's freetds doesn't ship a .pc file on macOS.
-        # We ship one in the repo and symlink it into the pkgconfig directory.
+      - name: Build
         run: |
+          export PKG_CONFIG_PATH="$(brew --prefix freetds)/lib/pkgconfig:/opt/homebrew/lib/pkgconfig"
           mkdir -p /opt/homebrew/lib/pkgconfig
           cp ci/freetds.pc /opt/homebrew/lib/pkgconfig/freetds.pc
-          pkg-config --cflags --libs freetds
-
-      - name: Build
-        run: swift build -v
-        env:
-          PKG_CONFIG_PATH: /opt/homebrew/lib/pkgconfig
+          echo "pkg-config check: $(pkg-config --cflags --libs freetds)"
+          swift build -v
 
       - name: Test
-        run: swift test -v
+        run: |
+          export PKG_CONFIG_PATH="$(brew --prefix freetds)/lib/pkgconfig:/opt/homebrew/lib/pkgconfig"
+          swift test -v
         env:
-          PKG_CONFIG_PATH: /opt/homebrew/lib/pkgconfig
           HOST:     ${{ secrets.DB_HOST }}
           USERNAME: ${{ secrets.DB_USERNAME }}
           PASSWORD: ${{ secrets.DB_PASSWORD }}
