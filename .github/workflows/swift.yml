@@ -19,7 +19,16 @@ jobs:
         run: sudo xcode-select -s /Applications/Xcode_15.4.app
 
       - name: Install FreeTDS
-        run: brew install pkg-config freetds
+        run: brew install freetds
+
+      - name: Set Homebrew environment
+        # On macos-14 (Apple Silicon), Homebrew installs to /opt/homebrew.
+        # PKG_CONFIG_PATH must be set so SPM's systemLibrary target can run
+        # `pkg-config freetds` and find the FreeTDS .pc file.
+        # GITHUB_ENV persists these variables for all subsequent steps.
+        run: |
+          echo "PKG_CONFIG_PATH=/opt/homebrew/lib/pkgconfig" >> $GITHUB_ENV
+          echo "PATH=/opt/homebrew/bin:$PATH" >> $GITHUB_ENV
 
       - name: Build
         run: swift build -v
