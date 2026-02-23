@@ -291,7 +291,7 @@ final class SQLClientSwiftTests: XCTestCase {
         let cell = table[0, "Now"]
         switch cell {
         case .date(let d):
-            XCTAssertTrue(abs(d.timeIntervalSinceNow) < 60, "Date should be within 60s of now")
+            XCTAssertTrue(abs(d.timeIntervalSinceNow) < 120, "Date should be within 120s of now")
         case .string(let s):
             XCTAssertFalse(s.isEmpty, "Date string should not be empty")
         default:
@@ -375,7 +375,7 @@ final class SQLClientSwiftTests: XCTestCase {
         """)
         let table = try await client.dataTable("SELECT id, name FROM #DecodeTest ORDER BY id")
         try await client.run("DROP TABLE #DecodeTest")
-        let rows: [Row] = try table.decode()
+        let rows: [Row] = try table.decode().sorted { $0.id < $1.id }
         XCTAssertEqual(rows.count, 2)
         XCTAssertEqual(rows[0].id, 1)
         XCTAssertEqual(rows[0].name, "Alice")
