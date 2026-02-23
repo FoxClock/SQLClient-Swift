@@ -79,9 +79,11 @@ public struct SQLClientConnectionOptions: Sendable {
 
 public struct SQLRow: Sendable {
     private let storage: [(key: String, value: Sendable)]
+    internal let columnTypes: [String: Int32]
     
-    internal init(_ dict: [(key: String, value: Sendable)]) {
+    internal init(_ dict: [(key: String, value: Sendable)], columnTypes: [String: Int32]) {
         self.storage = dict
+        self.columnTypes = columnTypes
     }
     
     public var columns: [String] { storage.map(\.key) }
@@ -295,8 +297,12 @@ public actor SQLClient {
 
             if numCols > 0 {
                 var colMeta: [(name: String, type: Int32)] = []
+                var columnTypes: [String: Int32] = [:]
                 for i in 1...numCols {
-                    colMeta.append((name: String(cString: dbcolname(conn, Int32(i))), type: dbcoltype(conn, Int32(i))))
+                    let name = String(cString: dbcolname(conn, Int32(i)))
+                    let type = dbcoltype(conn, Int32(i))
+                    colMeta.append((name: name, type: type))
+                    columnTypes[name] = type
                 }
                 while dbnextrow(conn) != NO_MORE_ROWS {
                     var storage: [(key: String, value: Sendable)] = []
@@ -304,7 +310,7 @@ public actor SQLClient {
                         let colIdx = Int32(idx + 1)
                         storage.append((key: col.name, value: columnValue(conn: conn, column: colIdx, type: col.type)))
                     }
-                    table.append(SQLRow(storage))
+                    table.append(SQLRow(storage, columnTypes: columnTypes))
                 }
             }
             tables.append(table)
@@ -344,7 +350,7 @@ public actor SQLClient {
             return legacyDate(conn: conn, type: type, data: data, len: len)
         case 40, 41, 42, 43, 187, 188: // SYBMSDATE, SYBMSTIME, SYBMSDATETIME2, SYBMSDATETIMEOFFSET, SYBBIGDATETIME, SYBBIGTIME
             return msDateTime(conn: conn, type: type, data: data, len: len)
-        case 55, 63, 60, 122, 110: // SYBDECIMAL, SYBNUMERIC, SYBMONEY, SYBMONEY4, SYBMONEYN
+        case 55, 63, 60, 122, 110, 106, 108: // SYBDECIMAL, SYBNUMERIC, SYBMONEY, SYBMONEY4, SYBMONEYN, SYBDECIMALN, SYBNUMERICN
             return convertToDecimal(conn: conn, type: type, data: data, len: len)
         case 36: // SYBUNIQUE
             guard len == 16 else { return NSNull() }
@@ -369,9 +375,11 @@ public actor SQLClient {
 
     private nonisolated func legacyDate(conn: OpaquePointer, type: Int32, data: UnsafeRawPointer, len: Int32) -> Sendable {
         var dbdt = DBDATETIME()
-        _ = dbconvert(conn, type, data, len, 61, // SYBDATETIME
-                  UnsafeMutableRawPointer(&dbdt).assumingMemoryBound(to: UInt8.self),
-                  Int32(MemoryLayout<DBDATETIME>.size))
+        _ = withUnsafeMutableBytes(of: &dbdt) { ptr in
+            dbconvert(conn, type, data, len, 61, // SYBDATETIME
+                      ptr.baseAddress!.assumingMemoryBound(to: UInt8.self),
+                      Int32(MemoryLayout<DBDATETIME>.size))
+        }
         var rec = DBDATEREC()
         dbdatecrack(conn, &rec, &dbdt)
         var c = DateComponents()
@@ -382,10 +390,13 @@ public actor SQLClient {
     }
 
     private nonisolated func msDateTime(conn: OpaquePointer, type: Int32, data: UnsafeRawPointer, len: Int32) -> Sendable {
-        var buf = [CChar](repeating: 0, count: 64)
-        let rc = dbconvert(conn, type, data, len, 47, // SYBCHAR
-                           UnsafeMutableRawPointer(&buf).assumingMemoryBound(to: UInt8.self),
-                           Int32(buf.count))
+        var buf = [CChar](repeating: 0, count: 65)
+        let count = Int32(64) // Leave last byte as null
+        let rc = buf.withUnsafeMutableBytes { ptr in
+            dbconvert(conn, type, data, len, 47, // SYBCHAR
+                      ptr.baseAddress!.assumingMemoryBound(to: UInt8.self),
+                      count)
+        }
         guard rc != FAIL else { return NSNull() }
         let str = String(cString: buf).trimmingCharacters(in: .whitespaces)
         for fmt in SQLClient.isoFormatters { if let d = fmt.date(from: str) { return d as Sendable } }
@@ -393,10 +404,13 @@ public actor SQLClient {
     }
 
     private nonisolated func convertToDecimal(conn: OpaquePointer, type: Int32, data: UnsafeRawPointer, len: Int32) -> Sendable {
-        var buf = [CChar](repeating: 0, count: 64)
-        _ = dbconvert(conn, type, data, len, 47, // SYBCHAR
-                  UnsafeMutableRawPointer(&buf).assumingMemoryBound(to: UInt8.self),
-                  Int32(buf.count))
+        var buf = [CChar](repeating: 0, count: 65)
+        let count = Int32(64) // Leave last byte as null
+        _ = buf.withUnsafeMutableBytes { ptr in
+            dbconvert(conn, type, data, len, 47, // SYBCHAR
+                      ptr.baseAddress!.assumingMemoryBound(to: UInt8.self),
+                      count)
+        }
         return NSDecimalNumber(string: String(cString: buf).trimmingCharacters(in: .whitespaces))
     }
 

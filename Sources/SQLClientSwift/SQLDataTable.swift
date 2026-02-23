@@ -60,8 +60,8 @@ public enum SQLCellValue: Codable, Sendable, Equatable {
     case uuid(UUID)
     case object(String)   // JSON-encoded fallback
 
-    /// Underlying value as Any? for compatibility with existing code.
-    public var anyValue: Any? {
+    /// Underlying value as Sendable? for compatibility with existing code.
+    public var anyValue: (any Sendable)? {
         switch self {
         case .null:           return nil
         case .string(let v):  return v
@@ -178,8 +178,10 @@ public enum SQLCellValue: Codable, Sendable, Equatable {
             return (raw as? NSNumber).map { .double($0.doubleValue) } ?? .null
         case 50, 104:                    // SYBBIT / SYBBITN
             return (raw as? NSNumber).map { .bool($0.boolValue) } ?? .null
-        case 55, 63, 60, 122, 110:       // decimal / numeric / money
-            return (raw as? NSDecimalNumber).map { .decimal($0.decimalValue) } ?? .null
+        case 55, 63, 60, 122, 110, 106, 108: // decimal / numeric / money
+            if let dec = raw as? NSDecimalNumber { return .decimal(dec.decimalValue) }
+            if let data = raw as? Data { return .bytes(data) }
+            return .null
         case 36:                         // SYBUNIQUE
             return (raw as? UUID).map { .uuid($0) } ?? .null
         case 45, 37, 34, 173, 174, 167: // binary types
@@ -201,11 +203,29 @@ public enum SQLCellValue: Codable, Sendable, Equatable {
         case 59:                         return .float
         case 62:                         return .double
         case 50, 104:                    return .boolean
-        case 55, 63, 60, 122, 110:       return .decimal
+        case 55, 63, 60, 122, 110, 106, 108: return .decimal
         case 36:                         return .guid
         case 45, 37, 34, 173, 174, 167: return .byteArray
         case 61, 58, 111, 40, 41, 42, 43, 187, 188: return .dateTime
         default:                         return .string
+        }
+    }
+
+    /// Reverse mapping of SQLColumnType to a representative FreeTDS type code.
+    internal static func freeTDSType(for type: SQLColumnType) -> Int32 {
+        switch type {
+        case .byte:      return 48
+        case .int16:     return 52
+        case .int32:     return 56
+        case .int64:     return 127
+        case .float:     return 59
+        case .double:    return 62
+        case .boolean:   return 50
+        case .decimal:   return 55
+        case .guid:      return 36
+        case .byteArray: return 45
+        case .dateTime:  return 61
+        default:         return 47 // SYBCHAR
         }
     }
 }
@@ -286,29 +306,29 @@ public struct SQLDataTable: Codable, Sendable {
 
     /// Decodes each row into a `Decodable` type using column names as coding keys.
     public func decode<T: Decodable>(as type: T.Type = T.self) throws -> [T] {
-    return try rows.map { rowCells in
-        // Map column names exactly as returned from SQL
-        var dict: [String: SQLCellValue] = [:]
-        for (ci, col) in columns.enumerated() where ci < rowCells.count {
-            dict[col.name] = rowCells[ci]
+        let colTypes = Dictionary(uniqueKeysWithValues: columns.map { ($0.name, SQLCellValue.freeTDSType(for: $0.type)) })
+        return try rows.map { rowCells in
+            let storage: [(key: String, value: Sendable)] = rowCells.enumerated().compactMap { (ci, cell) in
+                guard ci < columns.count else { return nil }
+                let value: Sendable = cell.anyValue ?? NSNull()
+                return (key: columns[ci].name, value: value)
+            }
+            return try T(from: SQLRowDecoder(row: SQLRow(storage, columnTypes: colTypes)))
         }
-        let row = SQLRow(dict)
-        // Use CodingKeys matching struct properties
-        return try T(from: SQLRowDecoder(row: row))
     }
-}
 
     // MARK: SQLRow compatibility
 
     /// Converts to `[SQLRow]` for compatibility with existing query methods.
     public func toSQLRows() -> [SQLRow] {
-        rows.map { rowCells in
+        let colTypes = Dictionary(uniqueKeysWithValues: columns.map { ($0.name, SQLCellValue.freeTDSType(for: $0.type)) })
+        return rows.map { rowCells in
             let storage: [(key: String, value: Sendable)] = rowCells.enumerated().compactMap { (ci, cell) in
                 guard ci < columns.count else { return nil }
-                let value: Sendable = cell.anyValue.map { $0 as AnyObject } ?? NSNull()
+                let value: Sendable = cell.anyValue ?? NSNull()
                 return (key: columns[ci].name, value: value)
             }
-            return SQLRow(storage)
+            return SQLRow(storage, columnTypes: colTypes)
         }
     }
 }
@@ -331,11 +351,7 @@ public struct SQLDataSet: Codable, Sendable {
 
     internal init(tables: [SQLDataTable]) { self.tables = tables }
 }
-extension String {
-    func caseInsensitiveCompare(_ other: String) -> Bool {
-        return self.lowercased() == other.lowercased()
-    }
-}
+
 // MARK: - SQLClientResult extension
 
 extension SQLClientResult {
@@ -354,13 +370,22 @@ extension SQLClientResult {
                 return SQLDataTable(name: "Table\(idx + 1)", columns: [], rows: [])
             }
             let cols = first.columns.map { name in
-                // Infer type from first non-null value in the column
+                // Use FreeTDS type if available in SQLRow
+                if let tdsType = first.columnTypes[name] {
+                    return SQLDataColumn(name: name, type: SQLCellValue.columnType(for: tdsType))
+                }
+                // Infer type from first non-null value in the column (fallback)
                 let sample = sqlRows.compactMap({ $0[name] }).first(where: { !($0 is NSNull) })
                 return SQLDataColumn(name: name, type: inferColumnType(from: sample))
             }
             let dataRows: [[SQLCellValue]] = sqlRows.map { sqlRow in
                 cols.map { col in
                     guard let raw = sqlRow[col.name] else { return .null }
+                    // If we have FreeTDS type for this row/column, use it
+                    if let tdsType = sqlRow.columnTypes[col.name] {
+                        let val: Sendable = (raw as AnyObject) as! Sendable
+                        return SQLCellValue.from(raw: val, freeTDSType: tdsType)
+                    }
                     return cellValueFromAny(raw, columnType: col.type)
                 }
             }

@@ -28,23 +28,30 @@ final class SQLClientSwiftTests: XCTestCase {
     /// Centralises boilerplate setup making
     override func setUp() async throws {
         try super.setUpWithError()
+    }
+
+    private func ensureConnected() async throws {
         guard canConnect else {
             throw XCTSkip("Set HOST, USERNAME, PASSWORD environment variables to run tests.")
         }
-        client = try await makeClient()
-
+        if client == nil {
+            client = try await makeClient()
+        }
     }
 
     /// Called after each XCTest method is run. Able to throw errors on cleanup.
     /// Ensures cleanup from each test is completed after the test is run. Before
     /// the next test is run.
     override func tearDown() async throws {
-        guard client != nil else { return } 
-        try await client.disconnect()
+        if let c = client {
+            try await c.disconnect()
+            client = nil
+        }
         try await super.tearDown()
     }
 
     func testConnect() async throws {
+        guard canConnect else { throw XCTSkip("No connection info") }
         // Use a local client, as the global client is already connected
         let localClient = SQLClient()
         try await localClient.connect(
@@ -60,6 +67,7 @@ final class SQLClientSwiftTests: XCTestCase {
     }
 
     func testDoubleConnectThrows() async throws {
+        guard canConnect else { throw XCTSkip("No connection info") }
         // Use a local client as the global client is already connected
         let localClient = SQLClient()
         try await localClient.connect(
@@ -75,43 +83,51 @@ final class SQLClientSwiftTests: XCTestCase {
     }
 
     func testSelectScalar() async throws {
+        try await ensureConnected()
         let rows = try await client.query("SELECT 42 AS Answer")
         XCTAssertEqual(rows.count, 1)
         XCTAssertEqual(rows[0].int("Answer"), 42)
     }
 
     func testSelectNull() async throws {
+        try await ensureConnected()
         let rows = try await client.query("SELECT NULL AS Val")
         XCTAssertTrue(rows[0].isNull("Val"))
     }
 
     func testSelectString() async throws {
+        try await ensureConnected()
         let rows = try await client.query("SELECT 'Hello' AS Msg")
         XCTAssertEqual(rows[0].string("Msg"), "Hello")
     }
 
     func testSelectFloat() async throws {
+        try await ensureConnected()
         let rows = try await client.query("SELECT CAST(3.14 AS FLOAT) AS Pi")
         XCTAssertEqual(rows[0].double("Pi") ?? 0, 3.14, accuracy: 0.001)
     }
 
     func testSelectBit() async throws {
+        try await ensureConnected()
         let rows = try await client.query("SELECT CAST(1 AS BIT) AS Flag")
         XCTAssertEqual(rows[0].bool("Flag"), true)
     }
 
     func testSelectDateTime() async throws {
+        try await ensureConnected()
         let rows = try await client.query("SELECT GETDATE() AS Now")
         XCTAssertNotNil(rows[0].date("Now"))
     }
 
     func testMultipleRows() async throws {
+        try await ensureConnected()
         let rows = try await client.query("SELECT 1 AS n UNION ALL SELECT 2 UNION ALL SELECT 3")
         XCTAssertEqual(rows.count, 3)
         XCTAssertEqual(rows.map { $0.int("n") }, [1, 2, 3])
     }
 
     func testMultipleResultSets() async throws {
+        try await ensureConnected()
         let result = try await client.execute("SELECT 1 AS A; SELECT 2 AS B;")
         XCTAssertEqual(result.tables.count, 2)
         XCTAssertEqual(result.tables[0][0].int("A"), 1)
@@ -119,6 +135,7 @@ final class SQLClientSwiftTests: XCTestCase {
     }
 
     func testRowsAffected() async throws {
+        try await ensureConnected()
         try await client.run(
             """
                 IF OBJECT_ID('tempdb..#T') IS NOT NULL DROP TABLE #T;
@@ -131,17 +148,19 @@ final class SQLClientSwiftTests: XCTestCase {
     }
 
     func testParameterisedQuery() async throws {
+        try await ensureConnected()
         let rows = try await client.execute("SELECT ? AS Name", parameters: ["O'Brien"])
         XCTAssertEqual(rows.rows[0].string("Name"), "O'Brien")
     }
 
     func testNullParameter() async throws {
+        try await ensureConnected()
         let rows = try await client.execute("SELECT ? AS Val", parameters: [nil])
         XCTAssertTrue(rows.rows[0].isNull("Val"))
     }
 
     func testParameterCountMismatch() async throws {
-        defer { Task { await client.disconnect() } }
+        try await ensureConnected()
         do {
             _ = try await client.execute("SELECT ? AS A", parameters: [1, 2])
             XCTFail("Expected parameterCountMismatch")
@@ -149,6 +168,7 @@ final class SQLClientSwiftTests: XCTestCase {
     }
 
     func testDecodableStruct() async throws {
+        try await ensureConnected()
         struct Point: Decodable {
             let x: Int
             let y: Int
@@ -159,6 +179,7 @@ final class SQLClientSwiftTests: XCTestCase {
     }
 
     func testDecodableSnakeCase() async throws {
+        try await ensureConnected()
         struct Item: Decodable {
             let itemId: Int
             let itemName: String
@@ -169,6 +190,7 @@ final class SQLClientSwiftTests: XCTestCase {
     }
 
     func testBadSQLThrows() async throws {
+        try await ensureConnected()
         do {
             _ = try await client.execute("THIS IS NOT VALID SQL")
             XCTFail("Expected executionFailed")
@@ -176,6 +198,7 @@ final class SQLClientSwiftTests: XCTestCase {
     }
 
     func testEmptySQLThrows() async throws {
+        try await ensureConnected()
         do {
             _ = try await client.execute("   ")
             XCTFail("Expected noCommandText")
@@ -193,6 +216,7 @@ final class SQLClientSwiftTests: XCTestCase {
     // MARK: - SQLDataTable tests
 
     func testDataTableRowAndColumnCount() async throws {
+        try await ensureConnected()
         let table = try await client.dataTable(
             "SELECT 1 AS A, 'hello' AS B UNION ALL SELECT 2, 'world'"
         )
@@ -201,12 +225,14 @@ final class SQLClientSwiftTests: XCTestCase {
     }
 
     func testDataTableColumnNames() async throws {
+        try await ensureConnected()
         let table = try await client.dataTable("SELECT 42 AS Answer, 'hi' AS Greeting")
         XCTAssertEqual(table.columns[0].name, "Answer")
         XCTAssertEqual(table.columns[1].name, "Greeting")
     }
 
     func testDataTableSubscriptByName() async throws {
+        try await ensureConnected()
         let table = try await client.dataTable("SELECT 99 AS Score")
         let cell = table[0, "Score"]
         if case .int32(let v) = cell {
@@ -218,6 +244,7 @@ final class SQLClientSwiftTests: XCTestCase {
     }
 
     func testDataTableSubscriptCaseInsensitive() async throws {
+        try await ensureConnected()
         let table = try await client.dataTable("SELECT 'test' AS MyColumn")
         // Access using different casing
         let byLower = table[0, "mycolumn"]
@@ -227,12 +254,14 @@ final class SQLClientSwiftTests: XCTestCase {
     }
 
     func testDataTableSubscriptByIndex() async throws {
+        try await ensureConnected()
         let table = try await client.dataTable("SELECT 7 AS N, 'x' AS S")
         let second = table[0, 1]
         XCTAssertEqual(second.anyValue as? String, "x")
     }
 
     func testDataTableSubscriptOutOfBoundsReturnsNull() async throws {
+        try await ensureConnected()
         let table = try await client.dataTable("SELECT 1 AS A")
         let oobRow = table[99, "A"]
         let oobCol = table[0, "DoesNotExist"]
@@ -241,12 +270,14 @@ final class SQLClientSwiftTests: XCTestCase {
     }
 
     func testDataTableNullCell() async throws {
+        try await ensureConnected()
         let table = try await client.dataTable("SELECT NULL AS Val")
         XCTAssertEqual(table[0, "Val"], .null)
         XCTAssertNil(table[0, "Val"].anyValue)
     }
 
     func testDataTableRowAsDictionary() async throws {
+        try await ensureConnected()
         let table = try await client.dataTable("SELECT 5 AS ID, 'Alice' AS Name")
         let dict = table.row(at: 0)
         XCTAssertEqual(dict.count, 2)
@@ -255,6 +286,7 @@ final class SQLClientSwiftTests: XCTestCase {
     }
 
     func testDataTableColumnValues() async throws {
+        try await ensureConnected()
         let table = try await client.dataTable(
             "SELECT 10 AS X UNION ALL SELECT 20 UNION ALL SELECT 30"
         )
@@ -264,11 +296,13 @@ final class SQLClientSwiftTests: XCTestCase {
     }
 
     func testDataTableNameAssignment() async throws {
+        try await ensureConnected()
         let table = try await client.dataTable("SELECT 1 AS A", name: "MyTable")
         XCTAssertEqual(table.name, "MyTable")
     }
 
     func testDataTableStringCellValue() async throws {
+        try await ensureConnected()
         let table = try await client.dataTable("SELECT 'SQLClient' AS Lib")
         if case .string(let s) = table[0, "Lib"] {
             XCTAssertEqual(s, "SQLClient")
@@ -278,6 +312,7 @@ final class SQLClientSwiftTests: XCTestCase {
     }
 
     func testDataTableBoolCellValue() async throws {
+        try await ensureConnected()
         let table = try await client.dataTable("SELECT CAST(1 AS BIT) AS Flag")
         if case .bool(let b) = table[0, "Flag"] {
             XCTAssertTrue(b)
@@ -287,6 +322,7 @@ final class SQLClientSwiftTests: XCTestCase {
     }
 
     func testDataTableDateCellValue() async throws {
+        try await ensureConnected()
         let table = try await client.dataTable("SELECT GETDATE() AS Now")
         let cell = table[0, "Now"]
         switch cell {
@@ -300,6 +336,7 @@ final class SQLClientSwiftTests: XCTestCase {
     }
 
     func testDataTableDecimalCellValue() async throws {
+        try await ensureConnected()
         let table = try await client.dataTable("SELECT CAST(3.14 AS DECIMAL(10,2)) AS Pi")
         let cell = table[0, "Pi"]
         // FreeTDS may return decimal as .decimal, .string, or raw .bytes depending on TDS protocol version.
@@ -318,6 +355,7 @@ final class SQLClientSwiftTests: XCTestCase {
     }
 
     func testDataTableDisplayString() async throws {
+        try await ensureConnected()
         let table = try await client.dataTable("SELECT 'hello|world' AS Msg")
         // Pipes in strings should be escaped for Markdown
         let display = table[0, "Msg"].displayString
@@ -327,6 +365,7 @@ final class SQLClientSwiftTests: XCTestCase {
     // MARK: - toMarkdown
 
     func testDataTableToMarkdownContainsColumnNames() async throws {
+        try await ensureConnected()
         let table = try await client.dataTable("SELECT 1 AS ID, 'Alice' AS Name")
         let md = table.toMarkdown()
         XCTAssertTrue(md.contains("ID"))
@@ -334,12 +373,14 @@ final class SQLClientSwiftTests: XCTestCase {
     }
 
     func testDataTableToMarkdownContainsValues() async throws {
+        try await ensureConnected()
         let table = try await client.dataTable("SELECT 42 AS Answer")
         let md = table.toMarkdown()
         XCTAssertTrue(md.contains("42"))
     }
 
     func testDataTableToMarkdownHasHeaderSeparator() async throws {
+        try await ensureConnected()
         let table = try await client.dataTable("SELECT 1 AS A, 2 AS B")
         let md = table.toMarkdown()
         // Every GFM table has a separator row with dashes
@@ -347,12 +388,14 @@ final class SQLClientSwiftTests: XCTestCase {
     }
 
     func testDataTableToMarkdownIncludesName() async throws {
+        try await ensureConnected()
         let table = try await client.dataTable("SELECT 1 AS A", name: "Results")
         let md = table.toMarkdown()
         XCTAssertTrue(md.hasPrefix("# Results"))
     }
 
     func testDataTableToMarkdownLineCount() async throws {
+        try await ensureConnected()
         let table = try await client.dataTable(
             "SELECT 1 AS N UNION ALL SELECT 2 UNION ALL SELECT 3"
         )
@@ -364,6 +407,7 @@ final class SQLClientSwiftTests: XCTestCase {
     // MARK: - decode<T>
 
     func testDataTableDecodeDecodable() async throws {
+        try await ensureConnected()
         struct Row: Decodable {
             let id: Int
             let name: String
@@ -375,15 +419,17 @@ final class SQLClientSwiftTests: XCTestCase {
         """)
         let table = try await client.dataTable("SELECT id, name FROM #DecodeTest ORDER BY id")
         try await client.run("DROP TABLE #DecodeTest")
+        
         let rows: [Row] = try table.decode()
         XCTAssertEqual(rows.count, 2)
         XCTAssertEqual(rows[0].id, 1)
-        XCTAssertEqual(rows[0].name, "Alice")
         XCTAssertEqual(rows[1].id, 2)
+        XCTAssertEqual(rows[0].name, "Alice")
         XCTAssertEqual(rows[1].name, "Bob")
     }
 
     func testDataTableDecodeOptionalField() async throws {
+        try await ensureConnected()
         struct Row: Decodable {
             let id: Int
             let note: String?
@@ -397,6 +443,7 @@ final class SQLClientSwiftTests: XCTestCase {
     // MARK: - toSQLRows
 
     func testDataTableToSQLRowsCount() async throws {
+        try await ensureConnected()
         let table = try await client.dataTable(
             "SELECT 1 AS A UNION ALL SELECT 2 UNION ALL SELECT 3"
         )
@@ -405,6 +452,7 @@ final class SQLClientSwiftTests: XCTestCase {
     }
 
     func testDataTableToSQLRowsValues() async throws {
+        try await ensureConnected()
         let table = try await client.dataTable("SELECT 'hello' AS Msg")
         let sqlRows = table.toSQLRows()
         XCTAssertEqual(sqlRows[0].string("Msg"), "hello")
@@ -413,6 +461,7 @@ final class SQLClientSwiftTests: XCTestCase {
     // MARK: - JSON Codable
 
     func testDataTableCodableRoundTrip() async throws {
+        try await ensureConnected()
         let table = try await client.dataTable(
             "SELECT 1 AS id, 'Alice' AS name, CAST(1 AS BIT) AS active"
         )
@@ -427,6 +476,7 @@ final class SQLClientSwiftTests: XCTestCase {
     }
 
     func testDataTableCodablePreservesNullCell() async throws {
+        try await ensureConnected()
         let table = try await client.dataTable("SELECT NULL AS Val")
         let encoded = try JSONEncoder().encode(table)
         let decoded = try JSONDecoder().decode(SQLDataTable.self, from: encoded)
@@ -436,6 +486,7 @@ final class SQLClientSwiftTests: XCTestCase {
     // MARK: - asDataTable / asSQLDataSet on SQLClientResult
 
     func testAsDataTableFromResult() async throws {
+        try await ensureConnected()
         let result = try await client.execute("SELECT 10 AS X, 20 AS Y")
         let table = result.asDataTable(name: "Test")
         XCTAssertEqual(table.name, "Test")
@@ -444,6 +495,7 @@ final class SQLClientSwiftTests: XCTestCase {
     }
 
     func testAsSQLDataSetFromResult() async throws {
+        try await ensureConnected()
         let result = try await client.execute("SELECT 1 AS A; SELECT 2 AS B;")
         let ds = result.asSQLDataSet()
         XCTAssertEqual(ds.count, 2)
@@ -454,22 +506,26 @@ final class SQLClientSwiftTests: XCTestCase {
     // MARK: - SQLDataSet
 
     func testDataSetCount() async throws {
+        try await ensureConnected()
         let ds = try await client.dataSet("SELECT 1 AS A; SELECT 2 AS B; SELECT 3 AS C;")
         XCTAssertEqual(ds.count, 3)
     }
 
     func testDataSetSubscriptByIndex() async throws {
+        try await ensureConnected()
         let ds = try await client.dataSet("SELECT 'first' AS V; SELECT 'second' AS V;")
         XCTAssertEqual(ds[0]?[0, "V"].anyValue as? String, "first")
         XCTAssertEqual(ds[1]?[0, "V"].anyValue as? String, "second")
     }
 
     func testDataSetSubscriptOutOfBoundsReturnsNil() async throws {
+        try await ensureConnected()
         let ds = try await client.dataSet("SELECT 1 AS A")
         XCTAssertNil(ds[99])
     }
 
     func testDataSetSubscriptByName() async throws {
+        try await ensureConnected()
         // Use a temp table with a named result via a stored proc isn't feasible here,
         // so we verify that name-based lookup works via asSQLDataSet with a named table.
         let result = try await client.execute("SELECT 42 AS Val")
@@ -480,6 +536,7 @@ final class SQLClientSwiftTests: XCTestCase {
     }
 
     func testDataSetTablesAreAccessible() async throws {
+        try await ensureConnected()
         let ds = try await client.dataSet(
             "SELECT 1 AS ID, 'Alice' AS Name UNION ALL SELECT 2, 'Bob';" +
             "SELECT 100 AS Score;"
@@ -491,9 +548,8 @@ final class SQLClientSwiftTests: XCTestCase {
         XCTAssertTrue(table1?[0, "Score"].displayString.hasPrefix("100") ?? false)
     }
 
-    // MARK: - SQLDataSet Codable
-
     func testDataSetCodableRoundTrip() async throws {
+        try await ensureConnected()
         let ds = try await client.dataSet("SELECT 1 AS A; SELECT 'hello' AS B;")
         let encoded = try JSONEncoder().encode(ds)
         let decoded = try JSONDecoder().decode(SQLDataSet.self, from: encoded)
