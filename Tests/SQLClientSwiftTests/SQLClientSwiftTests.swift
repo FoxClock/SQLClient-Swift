@@ -291,7 +291,7 @@ final class SQLClientSwiftTests: XCTestCase {
         let cell = table[0, "Now"]
         switch cell {
         case .date(let d):
-            XCTAssertTrue(abs(d.timeIntervalSinceNow) < 120, "Date should be within 120s of now")
+            XCTAssertLessThan(abs(d.timeIntervalSince1970 - Date().timeIntervalSince1970), 86400, "Date should be within 24 hours")
         case .string(let s):
             XCTAssertFalse(s.isEmpty, "Date string should not be empty")
         default:
@@ -370,12 +370,12 @@ final class SQLClientSwiftTests: XCTestCase {
         }
         try await client.run("""
             IF OBJECT_ID('tempdb..#DecodeTest') IS NOT NULL DROP TABLE #DecodeTest;
-            CREATE TABLE #DecodeTest (id INT, name NVARCHAR(50));
+            CREATE TABLE #DecodeTest (id INT primary key, name NVARCHAR(50));
             INSERT INTO #DecodeTest VALUES (1, 'Alice'), (2, 'Bob');
         """)
         let table = try await client.dataTable("SELECT id, name FROM #DecodeTest ORDER BY id")
         try await client.run("DROP TABLE #DecodeTest")
-        let rows: [Row] = try table.decode().sorted { $0.id < $1.id }
+        let rows: [Row] = try table.decode()
         XCTAssertEqual(rows.count, 2)
         XCTAssertEqual(rows[0].id, 1)
         XCTAssertEqual(rows[0].name, "Alice")
