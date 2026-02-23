@@ -14,6 +14,7 @@ This is a Swift rewrite and modernisation of [martinrybak/SQLClient](https://git
 - **Swift `actor`** — connection state is safe across concurrent callers by design
 - **`Decodable` row mapping** — map query results directly to your Swift structs
 - **Typed `SQLRow`** — access columns as `String`, `Int`, `Date`, `UUID`, `Decimal`, and more
+- **`SQLDataTable` & `SQLDataSet`** — typed, named tables with JSON serialisation and Markdown rendering
 - **Full TLS support** — `off`, `request`, `require`, and `strict` (TDS 8.0 / Azure SQL)
 - **FreeTDS 1.5** — NTLMv2, read-only AG routing, Kerberos auth, IPv6, cluster failover
 - **Affected-row counts** — `rowsAffected` from `INSERT` / `UPDATE` / `DELETE`
@@ -234,6 +235,119 @@ try await client.run(
 
 > **Note:** This uses string-level escaping (single-quote doubling). For maximum security with untrusted user input, prefer stored procedures.
 
+### SQLDataTable & SQLDataSet
+
+`SQLDataTable` is a typed, named result table — the Swift equivalent of .NET's `DataTable`. Each cell is a strongly-typed `SQLCellValue` enum, the table is `Codable` for JSON serialisation, and it can render itself as a Markdown table.
+
+`SQLDataSet` is a collection of `SQLDataTable` instances, used when a query or stored procedure returns multiple result sets.
+
+#### Fetching a single table
+
+```swift
+let table = try await client.dataTable("SELECT * FROM Users")
+
+print(table.rowCount)    // number of rows
+print(table.columnCount) // number of columns
+```
+
+#### Cell access
+
+```swift
+// By row index and column name (case-insensitive)
+let cell: SQLCellValue = table[0, "Name"]
+
+// By row and column index
+let cell: SQLCellValue = table[0, 0]
+
+// As a typed value
+switch table[0, "Age"] {
+case .int32(let age): print("Age:", age)
+case .null:           print("Age unknown")
+default:              break
+}
+
+// As Any? for interop with existing code
+let raw: Any? = table[0, "Name"].anyValue
+
+// Whole row as a dictionary
+let dict: [String: SQLCellValue] = table.row(at: 0)
+
+// All values in a column
+let names: [SQLCellValue] = table.column(named: "Name")
+```
+
+#### Markdown rendering
+
+```swift
+print(table.toMarkdown())
+```
+
+Output example:
+
+```
+| ID | Name  | Email             |
+|---|---|---|
+| 1  | Alice | alice@example.com |
+| 2  | Bob   | bob@example.com   |
+```
+
+#### Decoding rows into a `Decodable` struct
+
+```swift
+struct User: Decodable {
+    let id: Int
+    let name: String
+    let email: String
+}
+
+let users: [User] = try table.decode()
+```
+
+#### JSON serialisation
+
+`SQLDataTable` and `SQLDataSet` are fully `Codable`:
+
+```swift
+let json = try JSONEncoder().encode(table)
+let restored = try JSONDecoder().decode(SQLDataTable.self, from: json)
+```
+
+#### Converting an existing `SQLClientResult`
+
+```swift
+let result = try await client.execute("SELECT * FROM Orders")
+
+// First result set as SQLDataTable
+let table = result.asDataTable(name: "Orders")
+
+// All result sets as SQLDataSet
+let ds = result.asSQLDataSet()
+```
+
+#### Multi-table — `SQLDataSet`
+
+Use `dataSet()` when a stored procedure or batch returns more than one result set:
+
+```swift
+let ds = try await client.dataSet("EXEC sp_GetDashboard")
+
+// Access by index
+let summary = ds[0]
+
+// Access by name (case-insensitive, uses the table name assigned by the procedure)
+let details = ds["Details"]
+
+print(ds.count) // number of tables
+```
+
+#### Backward compatibility
+
+`SQLDataTable` can be converted back to `[SQLRow]` if you need to pass it to existing code:
+
+```swift
+let sqlRows: [SQLRow] = table.toSQLRows()
+```
+
 ### Error Handling
 
 All errors are thrown as `SQLClientError`, which conforms to `LocalizedError`:
@@ -304,26 +418,26 @@ try await client.connect(options: options)
 
 ## Type Mapping
 
-| SQL Server type | Swift type |
-|---|---|
-| `tinyint` | `NSNumber` (UInt8) |
-| `smallint` | `NSNumber` (Int16) |
-| `int` | `NSNumber` (Int32) |
-| `bigint` | `NSNumber` (Int64) |
-| `bit` | `NSNumber` (Bool) |
-| `real` | `NSNumber` (Float) |
-| `float` | `NSNumber` (Double) |
-| `decimal`, `numeric` | `NSDecimalNumber` |
-| `money`, `smallmoney` | `NSDecimalNumber` (4 decimal places) |
-| `char`, `varchar`, `nchar`, `nvarchar` | `String` |
-| `text`, `ntext`, `xml` | `String` |
-| `binary`, `varbinary`, `image` | `Data` |
-| `timestamp` | `Data` |
-| `datetime`, `smalldatetime` | `Date` |
-| `date`, `time`, `datetime2`, `datetimeoffset` | `Date` (TDS 7.3+) or `String` (TDS 7.1) |
-| `uniqueidentifier` | `UUID` |
-| `null` | `NSNull` |
-| `sql_variant`, `cursor`, `table` | ⚠️ Not supported |
+| SQL Server type | Swift type | `SQLCellValue` case |
+|---|---|---|
+| `tinyint` | `NSNumber` (UInt8) | `.int16` |
+| `smallint` | `NSNumber` (Int16) | `.int16` |
+| `int` | `NSNumber` (Int32) | `.int32` |
+| `bigint` | `NSNumber` (Int64) | `.int64` |
+| `bit` | `NSNumber` (Bool) | `.bool` |
+| `real` | `NSNumber` (Float) | `.float` |
+| `float` | `NSNumber` (Double) | `.double` |
+| `decimal`, `numeric` | `NSDecimalNumber` | `.decimal` |
+| `money`, `smallmoney` | `NSDecimalNumber` (4 dp) | `.decimal` |
+| `char`, `varchar`, `nchar`, `nvarchar` | `String` | `.string` |
+| `text`, `ntext`, `xml` | `String` | `.string` |
+| `binary`, `varbinary`, `image` | `Data` | `.bytes` |
+| `timestamp` | `Data` | `.bytes` |
+| `datetime`, `smalldatetime` | `Date` | `.date` |
+| `date`, `time`, `datetime2`, `datetimeoffset` | `Date` | `.date` |
+| `uniqueidentifier` | `UUID` | `.uuid` |
+| `null` | `NSNull` | `.null` |
+| `sql_variant`, `cursor`, `table` | ⚠️ Not supported | — |
 
 > **Date types note:** `date`, `time`, `datetime2`, and `datetimeoffset` are returned as `Date` when using TDS 7.3 or higher. FreeTDS 1.x defaults to `auto` protocol negotiation, which will select 7.3+ automatically for modern SQL Server versions. If you see strings instead of dates on an older server, set the `TDSVER` environment variable in your Xcode scheme to `7.3` or `auto`.
 
