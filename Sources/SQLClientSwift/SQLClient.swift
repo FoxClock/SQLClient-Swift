@@ -129,13 +129,28 @@ private struct TDSHandle: @unchecked Sendable {
 
 public actor SQLClient {
     public static let shared = SQLClient()
-    public init() {}
+    
+    private static let initializeFreeTDS: Void = {
+        dbinit()
+        dberrhandle(SQLClient_errorHandler)
+        dbmsghandle(SQLClient_messageHandler)
+    }()
+
+    public init() {
+        _ = SQLClient.initializeFreeTDS
+    }
 
     private let queue = DispatchQueue(label: "com.sqlclient.serial")
     private var activeTask: Task<Void, Never>?
 
-    private func awaitPrevious() async {
-        _ = await activeTask?.result
+    private func serialize<T: Sendable>(_ operation: @escaping @Sendable () async throws -> T) async throws -> T {
+        let previousTask = activeTask
+        let newTask: Task<T, Error> = Task {
+            _ = await previousTask?.result
+            return try await operation()
+        }
+        activeTask = Task { _ = await newTask.result }
+        return try await newTask.value
     }
 
     public var maxTextSize: Int = 4096
@@ -148,70 +163,44 @@ public actor SQLClient {
     }
 
    public func connect(options: SQLClientConnectionOptions) async throws {
-    print("DEBUG SQL: connect start")
-    await awaitPrevious()
-    print("DEBUG SQL: connect entering task")
-    let task = Task {
-        print("DEBUG SQL: connect execution start")
+    try await serialize {
         guard !self.connected else { throw SQLClientError.alreadyConnected }
         
         let result = try await self.runBlocking {
-            print("DEBUG SQL: connect blocking start")
             return try self._connectSync(options: options)
         }
         
         self.login = result.login.pointer
         self.connection = result.connection.pointer
         self.connected = true
-        print("DEBUG SQL: connect execution complete")
     }
-    activeTask = Task { _ = await task.result }
-    try await task.value
    }
 
     public func disconnect() async {
-        print("DEBUG SQL: disconnect start")
-        await awaitPrevious()
-        print("DEBUG SQL: disconnect entering task")
-        let task = Task {
-            print("DEBUG SQL: disconnect execution start")
+        _ = try? await serialize {
             guard self.connected else { return }
             let lgn = self.login.map { TDSHandle(pointer: $0) }
             let conn = self.connection.map { TDSHandle(pointer: $0) }
             await self.runBlockingVoid {
-                print("DEBUG SQL: disconnect blocking start")
                 self._disconnectSync(login: lgn, connection: conn)
             }
             self.login = nil
             self.connection = nil
             self.connected = false
-            print("DEBUG SQL: disconnect execution complete")
         }
-        activeTask = Task { _ = await task.result }
-        _ = await task.result
     }
 
     public func execute(_ sql: String) async throws -> SQLClientResult {
-        let snippet = String(sql.prefix(30)).replacingOccurrences(of: "\n", with: " ")
-        print("DEBUG SQL: execute start [\(snippet)...]")
-        await awaitPrevious()
-        print("DEBUG SQL: execute entering task [\(snippet)...]")
-        let task = Task {
-            print("DEBUG SQL: execute execution start [\(snippet)...]")
+        try await serialize {
             guard self.connected, let conn = self.connection else { throw SQLClientError.notConnected }
             guard !sql.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw SQLClientError.noCommandText }
             let maxText = self.maxTextSize
             let handle = TDSHandle(pointer: conn)
             
-            let res = try await self.runBlocking {
-                print("DEBUG SQL: execute blocking start [\(snippet)...]")
+            return try await self.runBlocking {
                 return try self._executeSync(sql: sql, connection: handle, maxTextSize: maxText)
             }
-            print("DEBUG SQL: execute execution complete [\(snippet)...]")
-            return res
         }
-        activeTask = Task { _ = await task.result }
-        return try await task.value
     }
 
     public func query(_ sql: String) async throws -> [SQLRow] { try await execute(sql).rows }
@@ -265,8 +254,8 @@ public actor SQLClient {
                 }
                 Thread.sleep(forTimeInterval: 0.1)
             }
-            CFReadStreamOpen(read)
-            CFWriteStreamOpen(write)
+            CFReadStreamClose(read)
+            CFWriteStreamClose(write)
 
             if connected {
                 cont.resume()
@@ -278,15 +267,14 @@ public actor SQLClient {
 }
 
     private nonisolated func _connectSync(options: SQLClientConnectionOptions) throws -> (login: TDSHandle, connection: TDSHandle) {
-        dbinit()
-        dberrhandle(SQLClient_errorHandler)
-        dbmsghandle(SQLClient_messageHandler)
-
         guard let lgn = dblogin() else { throw SQLClientError.loginAllocationFailed }
 
         dbsetlname(lgn, options.username, 2) // DBSETUSER
         dbsetlname(lgn, options.password, 3) // DBSETPWD
         dbsetlname(lgn, "SQLClientSwift", 5) // DBSETAPP
+        
+        // Ensure we get UTF-8 from the server for N-types
+        dbsetlcharset(lgn, "UTF-8")
 
         if let port = options.port { dbsetlshort(lgn, Int32(port), 13) } // DBSETPORT
         if options.encryption != .request { dbsetlname(lgn, options.encryption.rawValue, 17) } // DBSETENCRYPTION
@@ -320,6 +308,10 @@ public actor SQLClient {
 
     private nonisolated func _executeSync(sql: String, connection: TDSHandle, maxTextSize: Int) throws -> SQLClientResult {
         let conn = connection.pointer
+        
+        // Ensure any previous results are cancelled before a new command
+        dbcancel(conn)
+        
         _ = dbsetopt(conn, DBTEXTSIZE, "\(maxTextSize)", -1)
         
         guard dbcmd(conn, sql) != FAIL, dbsqlexec(conn) != FAIL else { throw SQLClientError.executionFailed }
@@ -382,7 +374,12 @@ public actor SQLClient {
             return NSNumber(value: data.load(as: UInt8.self) != 0)
         case 47, 39, 102, 103, 35, 99, 241: // SYBCHAR, SYBVARCHAR, SYBTEXT, SYBNTEXT, SYBXML, SYBNCHAR, SYBNVARCHAR
             let buf = UnsafeBufferPointer<UInt8>(start: data.assumingMemoryBound(to: UInt8.self), count: Int(len))
-            return String(bytes: buf, encoding: .utf8) ?? String(bytes: buf, encoding: .windowsCP1252) ?? ""
+            // Try UTF-8 first, then windowsCP1252 as fallback
+            if let str = String(bytes: buf, encoding: .utf8) { return str }
+            if let str = String(bytes: buf, encoding: .windowsCP1252) { return str }
+            // If it's UCS-2 (type 103/SYBNVARCHAR usually), try UTF-16
+            if let str = String(bytes: buf, encoding: .utf16LittleEndian) { return str }
+            return ""
         case 45, 37, 34, 173, 174, 167: // SYBBINARY, SYBVARBINARY, SYBIMAGE, SYBBIGBINARY, SYBBIGVARBINARY, SYBBLOB
             return Data(bytes: dataPtr, count: Int(len))
         case 61, 58, 111: // SYBDATETIME, SYBDATETIME4, SYBDATETIMN
