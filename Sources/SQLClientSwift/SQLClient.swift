@@ -148,50 +148,67 @@ public actor SQLClient {
     }
 
    public func connect(options: SQLClientConnectionOptions) async throws {
+    print("DEBUG SQL: connect start")
     await awaitPrevious()
+    print("DEBUG SQL: connect entering task")
     let task = Task {
+        print("DEBUG SQL: connect execution start")
         guard !self.connected else { throw SQLClientError.alreadyConnected }
         
         let result = try await self.runBlocking {
+            print("DEBUG SQL: connect blocking start")
             return try self._connectSync(options: options)
         }
         
         self.login = result.login.pointer
         self.connection = result.connection.pointer
         self.connected = true
+        print("DEBUG SQL: connect execution complete")
     }
     activeTask = Task { _ = await task.result }
     try await task.value
    }
 
     public func disconnect() async {
+        print("DEBUG SQL: disconnect start")
         await awaitPrevious()
+        print("DEBUG SQL: disconnect entering task")
         let task = Task {
+            print("DEBUG SQL: disconnect execution start")
             guard self.connected else { return }
             let lgn = self.login.map { TDSHandle(pointer: $0) }
             let conn = self.connection.map { TDSHandle(pointer: $0) }
             await self.runBlockingVoid {
+                print("DEBUG SQL: disconnect blocking start")
                 self._disconnectSync(login: lgn, connection: conn)
             }
             self.login = nil
             self.connection = nil
             self.connected = false
+            print("DEBUG SQL: disconnect execution complete")
         }
         activeTask = Task { _ = await task.result }
         _ = await task.result
     }
 
     public func execute(_ sql: String) async throws -> SQLClientResult {
+        let snippet = String(sql.prefix(30)).replacingOccurrences(of: "\n", with: " ")
+        print("DEBUG SQL: execute start [\(snippet)...]")
         await awaitPrevious()
+        print("DEBUG SQL: execute entering task [\(snippet)...]")
         let task = Task {
+            print("DEBUG SQL: execute execution start [\(snippet)...]")
             guard self.connected, let conn = self.connection else { throw SQLClientError.notConnected }
             guard !sql.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw SQLClientError.noCommandText }
             let maxText = self.maxTextSize
             let handle = TDSHandle(pointer: conn)
             
-            return try await self.runBlocking {
+            let res = try await self.runBlocking {
+                print("DEBUG SQL: execute blocking start [\(snippet)...]")
                 return try self._executeSync(sql: sql, connection: handle, maxTextSize: maxText)
             }
+            print("DEBUG SQL: execute execution complete [\(snippet)...]")
+            return res
         }
         activeTask = Task { _ = await task.result }
         return try await task.value
