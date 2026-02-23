@@ -336,7 +336,9 @@ extension SQLClientResult {
     /// Converts the first result table into an SQLDataTable.
     /// Call after `execute(_:)` when you need typed column info.
     public func asDataTable(name: String? = nil) -> SQLDataTable {
-        asSQLDataSet().tables.first ?? SQLDataTable(name: name, columns: [], rows: [])
+        let base = asSQLDataSet().tables.first ?? SQLDataTable(name: name, columns: [], rows: [])
+        guard let name = name else { return base }
+        return SQLDataTable(name: name, columns: base.columns, rows: base.rows)
     }
 
     /// Converts all result tables into an SQLDataSet.
