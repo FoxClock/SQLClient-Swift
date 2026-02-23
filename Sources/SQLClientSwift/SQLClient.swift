@@ -131,6 +131,8 @@ public actor SQLClient {
     public static let shared = SQLClient()
     public init() {}
 
+    private let queue = DispatchQueue(label: "com.sqlclient.serial")
+
     public var maxTextSize: Int = 4096
     private var login:      OpaquePointer?
     private var connection: OpaquePointer?
@@ -201,7 +203,7 @@ public actor SQLClient {
     /// Not called automatically — integrate tests and CI skip it safely this way.
     public func checkReachability(server: String, port: UInt16 = 1433) async throws {
     try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-        Thread.detachNewThread {
+        queue.async {
             var readStream:  Unmanaged<CFReadStream>?
             var writeStream: Unmanaged<CFWriteStream>?
             CFStreamCreatePairWithSocketToHost(
@@ -453,16 +455,20 @@ public actor SQLClient {
 
     private func runBlocking<T: Sendable>(_ body: @Sendable @escaping () throws -> T) async throws -> T {
         try await withCheckedThrowingContinuation { continuation in
-            Thread.detachNewThread {
-                do { continuation.resume(returning: try body()) }
-                catch { continuation.resume(throwing: error) }
+            queue.async {
+                do {
+                    let result = try body()
+                    continuation.resume(returning: result)
+                } catch {
+                    continuation.resume(throwing: error)
+                }
             }
         }
     }
 
     private func runBlockingVoid(_ body: @Sendable @escaping () -> Void) async {
         await withCheckedContinuation { continuation in
-            Thread.detachNewThread {
+            queue.async {
                 body()
                 continuation.resume()
             }
